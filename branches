@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+current=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+
+branch=$(
+  git for-each-ref \
+    --sort=-committerdate \
+    refs/heads/ \
+    --format='%(refname:short)	%(committerdate:relative)	%(subject)' |
+  while IFS=$'\t' read -r name date subject; do
+    if [ "$name" = "$current" ]; then
+      printf '* %s\t%s\t%s\n' "$name" "$date" "$subject"
+    else
+      printf '  %s\t%s\t%s\n' "$name" "$date" "$subject"
+    fi
+  done |
+  fzf \
+    --no-sort \
+    --ansi \
+    --delimiter='\t' \
+    --with-nth=1.. \
+    --preview='git log --oneline --graph -15 {1}' \
+    --header='Select a branch to checkout' |
+  cut -f1 |
+  sed 's/^[* ]*//'
+)
+
+[ -n "$branch" ] && git checkout "$branch"
