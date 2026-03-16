@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Resolve script dir (handles invocation from PATH where BASH_SOURCE may be just the command name)
+script_path="${BASH_SOURCE[0]}"
+[[ "$script_path" == */* ]] || script_path=$(command -v "$script_path")
+SCRIPT_DIR=$(cd "$(dirname "$script_path")" && pwd)
+USER_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/git-tools/ai-config"
+# Prefer user config; fall back to bundled config next to the script
+if [[ -f "$USER_CONFIG" ]]; then
+  AI_CONFIG="$USER_CONFIG"
+else
+  AI_CONFIG="$SCRIPT_DIR/ai-config"
+fi
+
+# Parse config file. Outputs lines: name|email|default_model|models_csv
+read_ai_config() {
+  [[ -f "$AI_CONFIG" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    echo "$line"
+  done < "$AI_CONFIG"
+}
+
+# Get models list for an AI (4th field from config, comma->newline)
+get_models_for_ai() {
+  local name="$1"
+  local default_model="$2"
+  local models
+  models=$(read_ai_config | while IFS='|' read -r n _ _ m; do
+    [[ "$n" == "$name" ]] && echo "$m" && break
+  done)
+  if [[ -n "$models" ]]; then
+    echo "$models" | tr ',' '\n' | grep -v '^$'
+  else
+    [[ -n "$default_model" ]] && echo "$default_model"
+  fi
+}
+
+# Parse -m "message" from args
+commit_message=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -m)
+      if [[ $# -gt 1 ]]; then
+        commit_message="$2"
+        shift 2
+      else
+        echo "Error: -m requires a message" >&2
+        exit 1
+      fi
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+# Check for staged changes (same behavior as git commit: exit if nothing staged)
+staged=$(git diff --cached --name-only 2>/dev/null | head -1)
+if [[ -z "$staged" ]]; then
+  echo "no changes added to commit" >&2
+  exit 1
+fi
+
+# No TTY: commit without AI attribution
+if [[ ! -t 0 ]] || [[ ! -c /dev/tty ]]; then
+  if [[ -n "$commit_message" ]]; then
+    git commit -m "$commit_message"
+  else
+    git commit
+  fi
+  exit 0
+fi
+
+# Build AI list for fzf: "DisplayName <email>" for display, tab-separated with name|email|model for parsing
+build_ai_list() {
+  printf '%s\t%s\t%s\n' "None" "" ""
+  read_ai_config | while IFS='|' read -r name email default_model _; do
+    printf '%s <%s>\t%s\t%s\t%s\n' "$name" "$email" "$name" "$email" "$default_model"
+  done
+}
+
+# fzf: Select AI co-author
+selection=$(build_ai_list | fzf \
+  --no-sort \
+  --delimiter=$'\t' \
+  --with-nth=1 \
+  --header='Select AI co-author' \
+  --height=~10 \
+  2>/dev/null)
+
+if [[ -z "$selection" ]]; then
+  echo "Aborted." >&2
+  exit 1
+fi
+
+# Parse selection: display_name\tname\temail\tmodel
+name=$(echo "$selection" | cut -f2)
+email=$(echo "$selection" | cut -f3)
+default_model=$(echo "$selection" | cut -f4)
+
+# No AI selected
+if [[ "$name" == "None" ]] || [[ -z "$email" ]]; then
+  if [[ -n "$commit_message" ]]; then
+    git commit -m "$commit_message"
+  else
+    git commit
+  fi
+  exit 0
+fi
+
+# AI selected: fzf for model (filtered by co-author) with option to type custom
+model_list=$(get_models_for_ai "$name" "$default_model")
+model_options=$(
+  printf 'Other (type custom)\n'
+  printf '%s\n' "$model_list" | grep -v '^$'
+)
+
+model=$(
+  echo "$model_options" | fzf \
+    --no-sort \
+    --print-query \
+    --header="Model for $name (select or type custom)" \
+    --height=~10 \
+    2>/dev/null | {
+    read -r query
+    read -r chosen || true
+    # If they selected "Other (type custom)", prompt for input
+    if [[ "$chosen" == "Other (type custom)" ]]; then
+      read -p "Model: " -r custom < /dev/tty
+      echo "${custom:-}"
+    elif [[ -n "$chosen" ]]; then
+      echo "$chosen"
+    else
+      # They typed something and hit enter with no selection - use query as custom
+      echo "$query"
+    fi
+  }
+)
+
+# If model still empty, use default
+[[ -z "$model" ]] && model="$default_model"
+
+contrib="50%"
+read -p "LLM contribution [50%]: " -r contrib_input < /dev/tty
+if [[ -n "$contrib_input" ]]; then
+  contrib="$contrib_input"
+  [[ "$contrib" =~ ^[0-9]+$ ]] && contrib="${contrib}%"
+fi
+
+# Get commit message
+msg_file=$(mktemp)
+trap 'rm -f "$msg_file"' EXIT
+
+if [[ -n "$commit_message" ]]; then
+  printf '%s\n' "$commit_message" > "$msg_file"
+else
+  # Open editor with template
+  {
+    echo "# Enter commit message. Lines starting with # will be ignored."
+    echo "#"
+  } > "$msg_file"
+  ${EDITOR:-vim} "$msg_file"
+  # Strip comment lines (portable)
+  sed '/^#/d' "$msg_file" > "${msg_file}.tmp" && mv "${msg_file}.tmp" "$msg_file"
+fi
+
+# Validate non-empty message
+if ! grep -q . "$msg_file"; then
+  echo "Error: Empty commit message" >&2
+  exit 1
+fi
+
+# Add trailers via git interpret-trailers
+trailer_file=$(mktemp)
+trap 'rm -f "$msg_file" "$trailer_file"' EXIT
+
+trailer_args=(--trailer "Co-authored-by: $name <$email>")
+[[ -n "$model" ]] && trailer_args+=(--trailer "Assistant-model: $model")
+trailer_args+=(--trailer "LLM-Contrib: $contrib")
+
+# Ensure blank line before trailers (required by git)
+echo "" >> "$msg_file"
+git interpret-trailers "${trailer_args[@]}" "$msg_file" > "$trailer_file"
+mv "$trailer_file" "$msg_file"
+
+git commit -F "$msg_file"
