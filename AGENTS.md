@@ -13,6 +13,9 @@ A collection of shell scripts that extend `git` with interactive, fzf-powered ut
 ### `branches`
 Interactive branch switcher. Lists branches sorted by most recent commit, marks the current branch with `*`, shows a `git log` preview, and checks out the selected branch.
 
+### `fix`
+Interactive fixup commit. Lists last 500 commits (no merges) in fzf with a `git show` preview, then runs `git commit --fixup <hash>`. Passes through extra args (e.g. `-m "message"`).
+
 ### `commit-ai-coauthor`
 Interactive commit helper that appends AI co-authorship trailers. Flow:
 1. Checks for staged changes (exits with "no changes added to commit" if none — same as `git commit`)
@@ -46,4 +49,5 @@ export PATH="$HOME/src/git-tools:$PATH"  # in ~/.zshrc
 
 git config --global alias.b '!branches'
 git config --global alias.ac '!commit-ai-coauthor'
+git config --global alias.fix '!fix'
 ```
