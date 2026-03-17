@@ -73,6 +73,7 @@ USAGE
 
 OPTIONS
   -m "message"    Use the given commit message (skips editor). Same as git commit -m.
+  --contrib N     LLM contribution percentage (e.g. 50, 75%, 100). Skips the prompt.
   --last-used     Skip AI and model selection; use the last-used AI co-author and model.
                   Combined with -m, makes the command fully non-interactive.
   --help          Show this help and exit.
@@ -83,13 +84,15 @@ EXAMPLES
   commit-ai-coauthor                    # Interactive: select AI, model, enter message
   commit-ai-coauthor -m "fix: typo"      # Interactive: select AI and model, message from -m
   commit-ai-coauthor -m "fix: typo" --last-used   # Non-interactive: commit with last-used AI
+  commit-ai-coauthor -m "fix: typo" --contrib 100   # Skip contribution prompt, use 100%
 
 EOF
 }
 
-# Parse -m "message", --help, --last-used from args; collect rest for git commit
+# Parse -m "message", --help, --last-used, --contrib from args; collect rest for git commit
 commit_message=""
 last_used=false
+contrib_arg=""
 git_commit_args=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -99,6 +102,15 @@ while [[ $# -gt 0 ]]; do
         shift 2
       else
         echo "Error: -m requires a message" >&2
+        exit 1
+      fi
+      ;;
+    --contrib|-c)
+      if [[ $# -gt 1 ]]; then
+        contrib_arg="$2"
+        shift 2
+      else
+        echo "Error: --contrib requires a value" >&2
         exit 1
       fi
       ;;
@@ -142,7 +154,12 @@ if [[ "$last_used" == true ]]; then
   name="$last_ai_name"
   email=$(echo "$ai_info" | cut -f1)
   model="$last_model"
-  contrib="50%"
+  if [[ -n "$contrib_arg" ]]; then
+    contrib="$contrib_arg"
+    [[ "$contrib" =~ ^[0-9]+$ ]] && contrib="${contrib}%"
+  else
+    contrib="50%"
+  fi
 else
   # No TTY: commit without AI attribution
   if [[ ! -t 0 ]] || [[ ! -c /dev/tty ]]; then
@@ -216,11 +233,16 @@ else
   # If model still empty, use default
   [[ -z "$model" ]] && model="$default_model"
 
-  contrib="50%"
-  read -p "LLM contribution [50%]: " -r contrib_input < /dev/tty
-  if [[ -n "$contrib_input" ]]; then
-    contrib="$contrib_input"
+  if [[ -n "$contrib_arg" ]]; then
+    contrib="$contrib_arg"
     [[ "$contrib" =~ ^[0-9]+$ ]] && contrib="${contrib}%"
+  else
+    contrib="50%"
+    read -p "LLM contribution [50%]: " -r contrib_input < /dev/tty
+    if [[ -n "$contrib_input" ]]; then
+      contrib="$contrib_input"
+      [[ "$contrib" =~ ^[0-9]+$ ]] && contrib="${contrib}%"
+    fi
   fi
 fi
 
