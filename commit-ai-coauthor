@@ -39,6 +39,14 @@ append_log() {
   printf '%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$name" "$model" "$(git rev-parse HEAD)" >> "$log_file"
 }
 
+# Get email and default_model for an AI by name (from config)
+get_ai_info() {
+  local name="$1"
+  while IFS='|' read -r n email default_model _; do
+    [[ "$n" == "$name" ]] && printf '%s\t%s\n' "$email" "$default_model" && return 0
+  done < <(read_ai_config)
+}
+
 # Get models list for an AI (4th field from config, comma->newline)
 get_models_for_ai() {
   local name="$1"
@@ -54,8 +62,35 @@ get_models_for_ai() {
   fi
 }
 
-# Parse -m "message" from args
+# Print usage and exit
+show_help() {
+  cat <<'EOF'
+commit-ai-coauthor - Interactive commit helper that appends AI co-authorship trailers
+
+USAGE
+  commit-ai-coauthor [OPTIONS]
+  git ac [OPTIONS]
+
+OPTIONS
+  -m "message"    Use the given commit message (skips editor). Same as git commit -m.
+  --last-used     Skip AI and model selection; use the last-used AI co-author and model.
+                  Combined with -m, makes the command fully non-interactive.
+  --help          Show this help and exit.
+
+  All other arguments are passed through to git commit (e.g. --amend, --no-verify, -v).
+
+EXAMPLES
+  commit-ai-coauthor                    # Interactive: select AI, model, enter message
+  commit-ai-coauthor -m "fix: typo"      # Interactive: select AI and model, message from -m
+  commit-ai-coauthor -m "fix: typo" --last-used   # Non-interactive: commit with last-used AI
+
+EOF
+}
+
+# Parse -m "message", --help, --last-used from args; collect rest for git commit
 commit_message=""
+last_used=false
+git_commit_args=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -m)
@@ -67,7 +102,16 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       ;;
+    --help|-h)
+      show_help
+      exit 0
+      ;;
+    --last-used)
+      last_used=true
+      shift
+      ;;
     *)
+      git_commit_args+=("$1")
       shift
       ;;
   esac
@@ -80,87 +124,104 @@ if [[ -z "$staged" ]]; then
   exit 1
 fi
 
-# No TTY: commit without AI attribution
-if [[ ! -t 0 ]] || [[ ! -c /dev/tty ]]; then
-  if [[ -n "$commit_message" ]]; then
-    git commit -m "$commit_message"
-  else
-    git commit
-  fi
-  exit 0
-fi
-
-# Build AI list for fzf: "DisplayName <email>" for display, tab-separated with name|email|model for parsing
-build_ai_list() {
-  printf '%s\t%s\t%s\n' "None" "" ""
-  read_ai_config | while IFS='|' read -r name email default_model _; do
-    printf '%s <%s>\t%s\t%s\t%s\n' "$name" "$email" "$name" "$email" "$default_model"
-  done
-}
-
 last_ai_name=""
 last_model=""
 read_last_used
 
-# fzf: Select AI co-author
-fzf_ai_args=(--no-sort --delimiter=$'\t' --with-nth=1 --header='Select AI co-author' --height=~10)
-[[ -n "$last_ai_name" ]] && fzf_ai_args+=(--query "$last_ai_name")
-selection=$(build_ai_list | fzf "${fzf_ai_args[@]}" 2>/dev/null)
-
-if [[ -z "$selection" ]]; then
-  echo "Aborted." >&2
-  exit 1
-fi
-
-# Parse selection: display_name\tname\temail\tmodel
-name=$(echo "$selection" | cut -f2)
-email=$(echo "$selection" | cut -f3)
-default_model=$(echo "$selection" | cut -f4)
-
-# No AI selected
-if [[ "$name" == "None" ]] || [[ -z "$email" ]]; then
-  if [[ -n "$commit_message" ]]; then
-    git commit -m "$commit_message"
-  else
-    git commit
+# --last-used: skip all interactivity, use last-used AI and model
+if [[ "$last_used" == true ]]; then
+  if [[ -z "$last_ai_name" || -z "$last_model" ]]; then
+    echo "No previous AI co-author found. Run without --last-used first." >&2
+    exit 1
   fi
-  exit 0
-fi
-
-# AI selected: fzf for model (filtered by co-author) with option to type custom
-model_list=$(get_models_for_ai "$name" "$default_model")
-model_options=$(
-  printf 'Other (type custom)\n'
-  printf '%s\n' "$model_list" | grep -v '^$'
-)
-
-fzf_model_args=(--no-sort --print-query --header="Model for $name (select or type custom)" --height=~10)
-[[ -n "$last_model" ]] && [[ "$last_ai_name" == "$name" ]] && fzf_model_args+=(--query "$last_model")
-model=$(
-  echo "$model_options" | fzf "${fzf_model_args[@]}" 2>/dev/null | {
-    read -r query
-    read -r chosen || true
-    # If they selected "Other (type custom)", prompt for input
-    if [[ "$chosen" == "Other (type custom)" ]]; then
-      read -p "Model: " -r custom < /dev/tty
-      echo "${custom:-}"
-    elif [[ -n "$chosen" ]]; then
-      echo "$chosen"
+  ai_info=$(get_ai_info "$last_ai_name")
+  if [[ -z "$ai_info" ]]; then
+    echo "AI '$last_ai_name' not found in config." >&2
+    exit 1
+  fi
+  name="$last_ai_name"
+  email=$(echo "$ai_info" | cut -f1)
+  model="$last_model"
+  contrib="50%"
+else
+  # No TTY: commit without AI attribution
+  if [[ ! -t 0 ]] || [[ ! -c /dev/tty ]]; then
+    if [[ -n "$commit_message" ]]; then
+      ((${#git_commit_args[@]})) && git commit -m "$commit_message" "${git_commit_args[@]}" || git commit -m "$commit_message"
     else
-      # They typed something and hit enter with no selection - use query as custom
-      echo "$query"
+      ((${#git_commit_args[@]})) && git commit "${git_commit_args[@]}" || git commit
     fi
+    exit 0
+  fi
+
+  # Build AI list for fzf: "DisplayName <email>" for display, tab-separated with name|email|model for parsing
+  build_ai_list() {
+    printf '%s\t%s\t%s\n' "None" "" ""
+    read_ai_config | while IFS='|' read -r name email default_model _; do
+      printf '%s <%s>\t%s\t%s\t%s\n' "$name" "$email" "$name" "$email" "$default_model"
+    done
   }
-)
 
-# If model still empty, use default
-[[ -z "$model" ]] && model="$default_model"
+  # fzf: Select AI co-author
+  fzf_ai_args=(--no-sort --delimiter=$'\t' --with-nth=1 --header='Select AI co-author' --height=~10)
+  [[ -n "$last_ai_name" ]] && fzf_ai_args+=(--query "$last_ai_name")
+  selection=$(build_ai_list | fzf "${fzf_ai_args[@]}" 2>/dev/null)
 
-contrib="50%"
-read -p "LLM contribution [50%]: " -r contrib_input < /dev/tty
-if [[ -n "$contrib_input" ]]; then
-  contrib="$contrib_input"
-  [[ "$contrib" =~ ^[0-9]+$ ]] && contrib="${contrib}%"
+  if [[ -z "$selection" ]]; then
+    echo "Aborted." >&2
+    exit 1
+  fi
+
+  # Parse selection: display_name\tname\temail\tmodel
+  name=$(echo "$selection" | cut -f2)
+  email=$(echo "$selection" | cut -f3)
+  default_model=$(echo "$selection" | cut -f4)
+
+  # No AI selected
+  if [[ "$name" == "None" ]] || [[ -z "$email" ]]; then
+    if [[ -n "$commit_message" ]]; then
+      ((${#git_commit_args[@]})) && git commit -m "$commit_message" "${git_commit_args[@]}" || git commit -m "$commit_message"
+    else
+      ((${#git_commit_args[@]})) && git commit "${git_commit_args[@]}" || git commit
+    fi
+    exit 0
+  fi
+
+  # AI selected: fzf for model (filtered by co-author) with option to type custom
+  model_list=$(get_models_for_ai "$name" "$default_model")
+  model_options=$(
+    printf 'Other (type custom)\n'
+    printf '%s\n' "$model_list" | grep -v '^$'
+  )
+
+  fzf_model_args=(--no-sort --print-query --header="Model for $name (select or type custom)" --height=~10)
+  [[ -n "$last_model" ]] && [[ "$last_ai_name" == "$name" ]] && fzf_model_args+=(--query "$last_model")
+  model=$(
+    echo "$model_options" | fzf "${fzf_model_args[@]}" 2>/dev/null | {
+      read -r query
+      read -r chosen || true
+      # If they selected "Other (type custom)", prompt for input
+      if [[ "$chosen" == "Other (type custom)" ]]; then
+        read -p "Model: " -r custom < /dev/tty
+        echo "${custom:-}"
+      elif [[ -n "$chosen" ]]; then
+        echo "$chosen"
+      else
+        # They typed something and hit enter with no selection - use query as custom
+        echo "$query"
+      fi
+    }
+  )
+
+  # If model still empty, use default
+  [[ -z "$model" ]] && model="$default_model"
+
+  contrib="50%"
+  read -p "LLM contribution [50%]: " -r contrib_input < /dev/tty
+  if [[ -n "$contrib_input" ]]; then
+    contrib="$contrib_input"
+    [[ "$contrib" =~ ^[0-9]+$ ]] && contrib="${contrib}%"
+  fi
 fi
 
 # Get commit message
@@ -199,5 +260,9 @@ echo "" >> "$msg_file"
 git interpret-trailers "${trailer_args[@]}" "$msg_file" > "$trailer_file"
 mv "$trailer_file" "$msg_file"
 
-git commit -F "$msg_file"
+if ((${#git_commit_args[@]})); then
+  git commit "${git_commit_args[@]}" -F "$msg_file"
+else
+  git commit -F "$msg_file"
+fi
 append_log

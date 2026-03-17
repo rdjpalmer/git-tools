@@ -26,7 +26,8 @@ Interactive commit helper that appends AI co-authorship trailers. Flow:
 6. Opens `$EDITOR` for commit message (or uses `-m "..."`)
 7. Commits with `Co-authored-by`, `Assistant-model`, and `LLM-Contrib` trailers via `git interpret-trailers`
 
-Accepts `-m "message"` to skip the editor.
+Options: `-m "message"` (skip editor), `--last-used` (skip AI/model selection, use last-used), `--help` (show usage).
+With `-m "..."` and `--last-used`, the command is fully non-interactive.
 
 Logs each AI-attributed commit to `~/.config/git-tools/commit-ai-coauthor.log` (tab-separated: timestamp, ai_name, model, commit_hash). Reads the last line to pre-select the previous AI and model in fzf.
 
