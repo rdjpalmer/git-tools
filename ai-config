@@ -1,0 +1,19 @@
+# AI configuration for git-tools
+# Shared across commit-ai-coauthor and other tools.
+#
+# To customize: copy this file to ~/.config/git-tools/ai-config
+#
+# Format: Name|email|default_model|model1,model2,model3,...
+# - Name: display name for the AI
+# - email: co-author email
+# - default_model: default when selecting this AI
+# - models: comma-separated list of popular models (for fzf selection)
+#
+# Lines starting with # are ignored. Add your own entries to extend the list.
+
+Claude|noreply@anthropic.com|claude-sonnet-4|claude-sonnet-4,claude-opus-4,claude-3-5-sonnet,claude-3-5-haiku,claude-3-opus,claude-3-sonnet
+Cursor|noreply@cursor.com|composer|composer,claude-sonnet-4,claude-opus-4,gpt-4o,gpt-4-turbo,claude-3-5-sonnet
+GitHub Copilot|noreply@github.com|copilot|copilot,copilot-chat,gpt-4,gpt-4o
+ChatGPT|noreply@openai.com|gpt-4o|gpt-4o,gpt-4o-mini,gpt-4,gpt-4-turbo,o1,o1-mini
+Aider|aider@aider.chat|gpt-4o|gpt-4o,claude-sonnet-4,claude-opus-4,claude-3-5-sonnet,gpt-4-turbo
+Warp|noreply@warp.dev|auto-responsive|auto-responsive,auto-genius,auto-cost-efficient,oz,claude-opus-4.6,claude-sonnet-4.6,claude-opus-4.5,claude-sonnet-4.5,claude-opus-4.1,claude-haiku-4.5,gpt-5.3-codex,gpt-5.2-codex,gpt-5.2,gpt-5.1-codex,gpt-5.1,gpt-5,gemini-3-pro,gemini-2.5-pro
