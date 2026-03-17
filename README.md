@@ -33,6 +33,7 @@ You can alias each tool as a git subcommand. Add these to your `~/.gitconfig` (o
 ```sh
 git config --global alias.b '!branches'
 git config --global alias.ac '!commit-ai-coauthor'
+git config --global alias.fix '!fix'
 ```
 
 Then use with:
@@ -41,6 +42,7 @@ Then use with:
 git b
 git ac
 git ac -m "fix: resolve auth bug"
+git fix
 ```
 
 ## Tools
@@ -48,6 +50,10 @@ git ac -m "fix: resolve auth bug"
 ### branches
 
 Interactively switch branches, sorted by most recently committed. Uses fzf with a commit log preview. The current branch is marked with `*`.
+
+### fix
+
+Interactively create a fixup commit. Uses fzf to pick from the last 500 commits (no merges), then runs `git commit --fixup <hash>`. Passes through any extra args (e.g. `git fix -m "message"`).
 
 ### commit-ai-coauthor
 
