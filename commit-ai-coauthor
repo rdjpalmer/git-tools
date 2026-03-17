@@ -23,6 +23,22 @@ read_ai_config() {
   done < "$AI_CONFIG"
 }
 
+# Read last-used AI and model from log (sets last_ai_name, last_model)
+read_last_used() {
+  local log_file="${XDG_CONFIG_HOME:-$HOME/.config}/git-tools/commit-ai-coauthor.log"
+  [[ -f "$log_file" ]] || return 0
+  local line
+  line=$(tail -n1 "$log_file" 2>/dev/null) || return 0
+  IFS=$'\t' read -r _ last_ai_name last_model _ <<< "$line"
+}
+
+# Append commit to log (timestamp, ai_name, model, commit_hash)
+append_log() {
+  local log_file="${XDG_CONFIG_HOME:-$HOME/.config}/git-tools/commit-ai-coauthor.log"
+  mkdir -p "$(dirname "$log_file")"
+  printf '%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$name" "$model" "$(git rev-parse HEAD)" >> "$log_file"
+}
+
 # Get models list for an AI (4th field from config, comma->newline)
 get_models_for_ai() {
   local name="$1"
@@ -82,14 +98,14 @@ build_ai_list() {
   done
 }
 
+last_ai_name=""
+last_model=""
+read_last_used
+
 # fzf: Select AI co-author
-selection=$(build_ai_list | fzf \
-  --no-sort \
-  --delimiter=$'\t' \
-  --with-nth=1 \
-  --header='Select AI co-author' \
-  --height=~10 \
-  2>/dev/null)
+fzf_ai_args=(--no-sort --delimiter=$'\t' --with-nth=1 --header='Select AI co-author' --height=~10)
+[[ -n "$last_ai_name" ]] && fzf_ai_args+=(--query "$last_ai_name")
+selection=$(build_ai_list | fzf "${fzf_ai_args[@]}" 2>/dev/null)
 
 if [[ -z "$selection" ]]; then
   echo "Aborted." >&2
@@ -118,13 +134,10 @@ model_options=$(
   printf '%s\n' "$model_list" | grep -v '^$'
 )
 
+fzf_model_args=(--no-sort --print-query --header="Model for $name (select or type custom)" --height=~10)
+[[ -n "$last_model" ]] && [[ "$last_ai_name" == "$name" ]] && fzf_model_args+=(--query "$last_model")
 model=$(
-  echo "$model_options" | fzf \
-    --no-sort \
-    --print-query \
-    --header="Model for $name (select or type custom)" \
-    --height=~10 \
-    2>/dev/null | {
+  echo "$model_options" | fzf "${fzf_model_args[@]}" 2>/dev/null | {
     read -r query
     read -r chosen || true
     # If they selected "Other (type custom)", prompt for input
@@ -187,3 +200,4 @@ git interpret-trailers "${trailer_args[@]}" "$msg_file" > "$trailer_file"
 mv "$trailer_file" "$msg_file"
 
 git commit -F "$msg_file"
+append_log

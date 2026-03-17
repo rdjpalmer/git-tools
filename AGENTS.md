@@ -25,6 +25,8 @@ Interactive commit helper that appends AI co-authorship trailers. Flow:
 
 Accepts `-m "message"` to skip the editor.
 
+Logs each AI-attributed commit to `~/.config/git-tools/commit-ai-coauthor.log` (tab-separated: timestamp, ai_name, model, commit_hash). Reads the last line to pre-select the previous AI and model in fzf.
+
 ### `ai-config`
 Shared data file (not a script). Format per non-comment line:
 ```
