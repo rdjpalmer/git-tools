@@ -2,13 +2,6 @@
 
 A collection of custom git utilities.
 
-## Requirements
-
-- [fzf](https://github.com/junegunn/fzf)
-- [jq](https://github.com/jqlang/jq) (for `spice-merge`)
-- [git-spice (gs)](https://github.com/abhinav/git-spice) (for `spice-merge`)
-- [GitHub CLI (gh)](https://cli.github.com/) (for `spice-merge`)
-
 ## Installation
 
 Clone the repo and add it to your PATH:
@@ -56,13 +49,19 @@ git sm --dry-run
 
 Interactively switch branches, sorted by most recently committed. Uses fzf with a commit log preview. The current branch is marked with `*`.
 
+**Requires:** [fzf](https://github.com/junegunn/fzf)
+
 ### fix
 
 Interactively create a fixup commit. Uses fzf to pick from the last 500 commits (no merges), then runs `git commit --fixup <hash>`. Passes through any extra args (e.g. `git fix -m "message"`).
 
+**Requires:** [fzf](https://github.com/junegunn/fzf)
+
 ### commit-ai-coauthor
 
 Interactively create commits with AI co-author attribution. Uses fzf to select an AI assistant (Claude, Cursor, Copilot, etc.), then pick a model from popular options filtered by co-author (or type custom). Optionally add contribution metadata, then commits with proper `Co-authored-by` and trailer format.
+
+**Requires:** [fzf](https://github.com/junegunn/fzf)
 
 **Flags:**
 
@@ -82,6 +81,8 @@ All other arguments (e.g. `--amend`, `--no-verify`, `-v`) are passed through to 
 ### spice-merge
 
 Sequentially merge a stack of PRs managed by [git-spice](https://github.com/abhinav/git-spice). Works like a local merge queue: merges PRs bottom-up through the stack, rebasing, pushing, and waiting for CI between each merge. Re-running after a failure picks up from the next unmerged PR.
+
+**Requires:** [jq](https://github.com/jqlang/jq), [git-spice (gs)](https://github.com/abhinav/git-spice), [GitHub CLI (gh)](https://cli.github.com/)
 
 **Flags:**
 
