@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ─── Dependencies ──────────────────────────────────────────────────────────────
+for cmd in jq gs gh; do
+  command -v "$cmd" &>/dev/null || { echo "Error: '$cmd' is required" >&2; exit 1; }
+done
+
+# ─── Usage ─────────────────────────────────────────────────────────────────────
+show_help() {
+  cat <<'EOF'
+spice-merge — Sequentially merge a stack of PRs managed by git-spice
+
+USAGE
+  spice-merge [OPTIONS]
+
+SCOPE (mutually exclusive; default: --current)
+  --stack             Merge the entire stack (bottom to top)
+  --current           Merge up to and including the current branch
+  --branch NAME       Merge up to and including the named branch
+  --pr NUMBER         Merge up to and including the PR with the given number
+
+MERGE METHOD (passed to gh pr merge; omit for repo default)
+  --squash            Squash and merge
+  --merge             Create a merge commit
+  --rebase            Rebase and merge
+
+OPTIONS
+  --dry-run           Show what would be merged without doing it
+  --help              Show this help and exit
+
+FLOW
+  For each branch in the stack (bottom to top):
+    1. Merge via gh pr merge
+    2. Sync with remote (gs repo sync)
+    3. Rebase remaining branches (gs upstack restack)
+    4. Push rebased branches
+    5. Wait for CI on the next PR (gh pr checks --watch)
+
+EXAMPLES
+  spice-merge                           # Merge up to current branch
+  spice-merge --stack --squash          # Squash-merge entire stack
+  spice-merge --branch feat-b           # Merge up to feat-b
+  spice-merge --pr 42 --dry-run         # Preview merge plan for PR #42
+EOF
+}
+
+# ─── Parse arguments ───────────────────────────────────────────────────────────
+scope="current"
+scope_value=""
+merge_method_args=()
+dry_run=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --stack)    scope="stack"; shift ;;
+    --current)  scope="current"; shift ;;
+    --branch)
+      [[ $# -gt 1 ]] || { echo "Error: --branch requires a name" >&2; exit 1; }
+      scope="branch"; scope_value="$2"; shift 2 ;;
+    --pr)
+      [[ $# -gt 1 ]] || { echo "Error: --pr requires a number" >&2; exit 1; }
+      scope="pr"; scope_value="$2"; shift 2 ;;
+    --squash)   merge_method_args=(--squash); shift ;;
+    --merge)    merge_method_args=(--merge); shift ;;
+    --rebase)   merge_method_args=(--rebase); shift ;;
+    --dry-run)  dry_run=true; shift ;;
+    --help|-h)  show_help; exit 0 ;;
+    *)          echo "Error: unknown option '$1'" >&2; exit 1 ;;
+  esac
+done
+
+# ─── Gather stack ──────────────────────────────────────────────────────────────
+stack_json=$(gs log long --json 2>/dev/null | jq -s '.')
+if [[ "$(echo "$stack_json" | jq 'length')" -eq 0 ]]; then
+  echo "Error: no tracked branches in the current stack" >&2
+  exit 1
+fi
+
+# Look up a jq expression for a branch by name
+branch_field() {
+  echo "$stack_json" | jq -r --arg name "$1" ".[] | select(.name == \$name) | $2"
+}
+
+# ─── Resolve target branch ────────────────────────────────────────────────────
+target=""
+case "$scope" in
+  current)
+    target=$(echo "$stack_json" | jq -r '.[] | select(.current == true) | .name')
+    [[ -n "$target" ]] || { echo "Error: cannot determine current branch from stack" >&2; exit 1; }
+    down=$(branch_field "$target" '.down.name // empty')
+    [[ -n "$down" ]] || { echo "Error: current branch is trunk — nothing to merge" >&2; exit 1; }
+    ;;
+  stack)
+    # Topmost branch(es): have a .down but no .ups
+    tops=$(echo "$stack_json" | jq '[.[] | select(.down != null and (.ups == null or (.ups | length == 0)))]')
+    count=$(echo "$tops" | jq 'length')
+    if [[ "$count" -eq 0 ]]; then
+      echo "Error: no branches to merge" >&2; exit 1
+    elif [[ "$count" -gt 1 ]]; then
+      echo "Error: stack has multiple tops — use --branch to pick a path:" >&2
+      echo "$tops" | jq -r '.[].name' | sed 's/^/  /' >&2
+      exit 1
+    fi
+    target=$(echo "$tops" | jq -r '.[0].name')
+    ;;
+  branch)
+    exists=$(branch_field "$scope_value" '.name // empty')
+    [[ -n "$exists" ]] || { echo "Error: branch '$scope_value' not found in current stack" >&2; exit 1; }
+    down=$(branch_field "$scope_value" '.down.name // empty')
+    [[ -n "$down" ]] || { echo "Error: '$scope_value' is trunk — nothing to merge" >&2; exit 1; }
+    target="$scope_value"
+    ;;
+  pr)
+    target=$(echo "$stack_json" | jq -r --arg pr "#$scope_value" '.[] | select(.change.id == $pr) | .name')
+    [[ -n "$target" ]] || { echo "Error: PR #$scope_value not found in current stack" >&2; exit 1; }
+    ;;
+esac
+
+# ─── Build merge order (bottom → top, excluding trunk) ────────────────────────
+merge_order=()
+walk="$target"
+while true; do
+  down=$(branch_field "$walk" '.down.name // empty')
+  [[ -n "$down" ]] || break  # reached trunk
+
+  if ((${#merge_order[@]})); then
+    merge_order=("$walk" "${merge_order[@]}")
+  else
+    merge_order=("$walk")
+  fi
+  walk="$down"
+done
+
+if [[ ${#merge_order[@]} -eq 0 ]]; then
+  echo "Nothing to merge." >&2
+  exit 0
+fi
+
+# ─── Validate every branch has a PR ───────────────────────────────────────────
+for b in "${merge_order[@]}"; do
+  pr_id=$(branch_field "$b" '.change.id // empty')
+  [[ -n "$pr_id" ]] || {
+    echo "Error: branch '$b' has no PR — run 'gs branch submit' first" >&2; exit 1; }
+done
+
+# ─── Dry run ───────────────────────────────────────────────────────────────────
+if [[ "$dry_run" == true ]]; then
+  echo "Merge plan (${#merge_order[@]} PRs):"
+  for b in "${merge_order[@]}"; do
+    printf "  %-6s  %-30s  %s\n" \
+      "$(branch_field "$b" '.change.id')" \
+      "$b" \
+      "$(branch_field "$b" '.change.url')"
+  done
+  if ((${#merge_method_args[@]})); then
+    echo ""
+    echo "Merge method: ${merge_method_args[0]#--}"
+  fi
+  exit 0
+fi
+
+# ─── Merge loop ────────────────────────────────────────────────────────────────
+total=${#merge_order[@]}
+for i in "${!merge_order[@]}"; do
+  branch="${merge_order[$i]}"
+  step=$((i + 1))
+  pr_number=$(branch_field "$branch" '.change.id' | tr -d '#')
+
+  echo ""
+  echo "[$step/$total] Merging $branch (PR #$pr_number)…"
+
+  # 1. Merge the PR
+  merge_cmd=(gh pr merge "$pr_number" --delete-branch)
+  ((${#merge_method_args[@]})) && merge_cmd+=("${merge_method_args[@]}")
+
+  if ! "${merge_cmd[@]}"; then
+    echo "Error: failed to merge PR #$pr_number ($branch)" >&2
+    echo "Re-run spice-merge to continue from this point." >&2
+    exit 1
+  fi
+  echo "  ✓ Merged"
+
+  # Last branch — no need to restack or wait for CI
+  [[ $step -lt $total ]] || break
+
+  # 2. Sync with remote (pulls trunk, deletes merged branch)
+  echo "  Syncing…"
+  gs repo sync
+
+  # 3. Checkout next branch and restack
+  next_branch="${merge_order[$((i + 1))]}"
+  echo "  Restacking from $next_branch…"
+  git checkout "$next_branch" --quiet
+  gs upstack restack
+
+  # 4. Push rebased branches so CI runs on updated code
+  echo "  Pushing rebased branches…"
+  for ((j=i+1; j<total; j++)); do
+    git push --force-with-lease origin "${merge_order[$j]}"
+  done
+
+  # 5. Wait for CI on the next PR
+  next_pr=$(branch_field "$next_branch" '.change.id' | tr -d '#')
+  echo "  Waiting for CI on PR #$next_pr ($next_branch)…"
+  if ! gh pr checks "$next_pr" --watch; then
+    echo "Error: CI failed on PR #$next_pr ($next_branch)" >&2
+    echo "Fix CI, then re-run spice-merge to continue." >&2
+    exit 1
+  fi
+  echo "  ✓ CI passed"
+done
+
+echo ""
+echo "Done — $total PR(s) merged."
+
+# Final sync to clean up
+gs repo sync 2>/dev/null || true

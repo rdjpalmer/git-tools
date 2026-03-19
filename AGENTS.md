@@ -6,7 +6,7 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 
 A collection of shell scripts that extend `git` with interactive, fzf-powered utilities. Scripts are designed to be added directly to `$PATH` and optionally aliased as git subcommands.
 
-**Dependency:** All tools require [`fzf`](https://github.com/junegunn/fzf).
+**Dependencies:** Most tools require [`fzf`](https://github.com/junegunn/fzf). `spice-merge` requires [`jq`](https://github.com/jqlang/jq), [`gs` (git-spice)](https://github.com/abhinav/git-spice), and [`gh`](https://cli.github.com/).
 
 ## Tools
 
@@ -31,6 +31,21 @@ With `-m "..."` and `--last-used`, the command is fully non-interactive.
 
 Logs each AI-attributed commit to `~/.config/git-tools/commit-ai-coauthor.log` (tab-separated: timestamp, ai_name, model, commit_hash). Reads the last line to pre-select the previous AI and model in fzf.
 
+### `spice-merge`
+Sequential merge queue for stacked PRs managed by git-spice. Merges PRs bottom-up through the stack, syncing, rebasing, and waiting for CI between each merge.
+
+Scope flags (mutually exclusive, default `--current`):
+- `--stack` — merge entire stack bottom to top
+- `--current` — merge up to and including the current branch
+- `--branch NAME` — merge up to the named branch
+- `--pr NUMBER` — merge up to the given PR number
+
+Merge method flags (passed through to `gh pr merge`): `--squash`, `--merge`, `--rebase`. Omit for repo default.
+
+Other options: `--dry-run` (preview merge plan), `--help`.
+
+Flow per branch: `gh pr merge` → `gs repo sync` → `gs upstack restack` → push remaining → `gh pr checks --watch`. On failure (merge error or CI), exits with a message; re-running picks up from the next unmerged PR.
+
 ### `ai-config`
 Shared data file (not a script). Format per non-comment line:
 ```
@@ -53,4 +68,5 @@ export PATH="$HOME/src/git-tools:$PATH"  # in ~/.zshrc
 git config --global alias.b '!branches'
 git config --global alias.ac '!commit-ai-coauthor'
 git config --global alias.fix '!fix'
+git config --global alias.sm '!spice-merge'
 ```
