@@ -5,6 +5,9 @@ A collection of custom git utilities.
 ## Requirements
 
 - [fzf](https://github.com/junegunn/fzf)
+- [jq](https://github.com/jqlang/jq) (for `spice-merge`)
+- [git-spice (gs)](https://github.com/abhinav/git-spice) (for `spice-merge`)
+- [GitHub CLI (gh)](https://cli.github.com/) (for `spice-merge`)
 
 ## Installation
 
@@ -34,6 +37,7 @@ You can alias each tool as a git subcommand. Add these to your `~/.gitconfig` (o
 git config --global alias.b '!branches'
 git config --global alias.ac '!commit-ai-coauthor'
 git config --global alias.fix '!fix'
+git config --global alias.sm '!spice-merge'
 ```
 
 Then use with:
@@ -43,6 +47,7 @@ git b
 git ac
 git ac -m "fix: resolve auth bug"
 git fix
+git sm --dry-run
 ```
 
 ## Tools
@@ -73,3 +78,21 @@ All other arguments (e.g. `--amend`, `--no-verify`, `-v`) are passed through to 
 **Configuration:** AI config is read from `~/.config/git-tools/ai-config` (overrides the bundled `ai-config` in the repo). Format: `Name|email|default_model|model1,model2,...` — edit to add AIs, change models, or update emails. The bundled config is shared across tools.
 
 **Log and memory:** Each AI-attributed commit is appended to `~/.config/git-tools/commit-ai-coauthor.log` (tab-separated: timestamp, ai_name, model, commit_hash). The last-used AI and model are remembered and pre-selected in fzf on the next run.
+
+### spice-merge
+
+Sequentially merge a stack of PRs managed by [git-spice](https://github.com/abhinav/git-spice). Works like a local merge queue: merges PRs bottom-up through the stack, rebasing, pushing, and waiting for CI between each merge. Re-running after a failure picks up from the next unmerged PR.
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--stack` | Merge the entire stack (bottom to top) |
+| `--current` | Merge up to and including the current branch (default) |
+| `--branch NAME` | Merge up to and including the named branch |
+| `--pr NUMBER` | Merge up to and including the given PR number |
+| `--squash` | Squash and merge (passed to `gh pr merge`) |
+| `--merge` | Create a merge commit (passed to `gh pr merge`) |
+| `--rebase` | Rebase and merge (passed to `gh pr merge`) |
+| `--dry-run` | Show the merge plan without executing |
+| `--help` / `-h` | Show usage and exit |
