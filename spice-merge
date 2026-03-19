@@ -162,7 +162,7 @@ fi
 
 # ─── Merge loop ────────────────────────────────────────────────────────────────
 total=${#merge_order[@]}
-for i in "${!merge_order[@]}"; do
+for ((i=0; i<total; i++)); do
   branch="${merge_order[$i]}"
   step=$((i + 1))
   pr_number=$(branch_field "$branch" '.change.id' | tr -d '#')
@@ -171,7 +171,7 @@ for i in "${!merge_order[@]}"; do
   echo "[$step/$total] Merging $branch (PR #$pr_number)…"
 
   # 1. Merge the PR
-  merge_cmd=(gh pr merge "$pr_number" --delete-branch)
+  merge_cmd=(gh pr merge "$pr_number")
   ((${#merge_method_args[@]})) && merge_cmd+=("${merge_method_args[@]}")
 
   if ! "${merge_cmd[@]}"; then
@@ -189,7 +189,8 @@ for i in "${!merge_order[@]}"; do
   gs repo sync
 
   # 3. Checkout next branch and restack
-  next_branch="${merge_order[$((i + 1))]}"
+  next_idx=$((i + 1))
+  next_branch="${merge_order[$next_idx]}"
   echo "  Restacking from $next_branch…"
   git checkout "$next_branch" --quiet
   gs upstack restack
