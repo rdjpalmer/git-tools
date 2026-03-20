@@ -20,7 +20,7 @@ SCOPE (mutually exclusive; default: --current)
   --branch NAME       Merge up to and including the named branch
   --pr NUMBER         Merge up to and including the PR with the given number
 
-MERGE METHOD (passed to gh pr merge; omit for repo default)
+MERGE METHOD (required; passed to gh pr merge)
   --squash            Squash and merge
   --merge             Create a merge commit
   --rebase            Rebase and merge
@@ -38,9 +38,9 @@ FLOW
     5. Wait for CI on the next PR (gh pr checks --watch)
 
 EXAMPLES
-  spice-merge                           # Merge up to current branch
+  spice-merge --squash                  # Squash-merge up to current branch
   spice-merge --stack --squash          # Squash-merge entire stack
-  spice-merge --branch feat-b           # Merge up to feat-b
+  spice-merge --branch feat-b --rebase  # Rebase-merge up to feat-b
   spice-merge --pr 42 --dry-run         # Preview merge plan for PR #42
 EOF
 }
@@ -69,6 +69,12 @@ while [[ $# -gt 0 ]]; do
     *)          echo "Error: unknown option '$1'" >&2; exit 1 ;;
   esac
 done
+
+# ─── Require merge method (unless dry-run) ─────────────────────────────────────
+if [[ "$dry_run" == false ]] && [[ ${#merge_method_args[@]} -eq 0 ]]; then
+  echo "Error: merge method required (--squash, --merge, or --rebase)" >&2
+  exit 1
+fi
 
 # ─── Gather stack ──────────────────────────────────────────────────────────────
 stack_json=$(gs log long --json 2>/dev/null | jq -s '.')
@@ -170,8 +176,8 @@ for ((i=0; i<total; i++)); do
   echo ""
   echo "[$step/$total] Merging $branch (PR #$pr_number)…"
 
-  # 1. Merge the PR
-  merge_cmd=(gh pr merge "$pr_number")
+  # 1. Merge the PR (--no-delete-branch: let gs repo sync handle cleanup)
+  merge_cmd=(gh pr merge "$pr_number" --no-delete-branch)
   ((${#merge_method_args[@]})) && merge_cmd+=("${merge_method_args[@]}")
 
   if ! "${merge_cmd[@]}"; then
@@ -186,7 +192,7 @@ for ((i=0; i<total; i++)); do
 
   # 2. Sync with remote (pulls trunk, deletes merged branch)
   echo "  Syncing…"
-  gs repo sync
+  yes | gs repo sync
 
   # 3. Checkout next branch and restack
   next_idx=$((i + 1))
