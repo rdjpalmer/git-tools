@@ -177,7 +177,7 @@ for ((i=0; i<total; i++)); do
   echo "[$step/$total] Merging $branch (PR #$pr_number)…"
 
   # 1. Merge the PR (--no-delete-branch: let gs repo sync handle cleanup)
-  merge_cmd=(gh pr merge "$pr_number" --no-delete-branch)
+  merge_cmd=(gh pr merge "$pr_number")
   ((${#merge_method_args[@]})) && merge_cmd+=("${merge_method_args[@]}")
 
   if ! "${merge_cmd[@]}"; then
