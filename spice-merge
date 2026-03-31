@@ -137,6 +137,8 @@ while true; do
   fi
   walk="$down"
 done
+# After the loop, $walk is the trunk branch (first ancestor with no .down).
+trunk="$walk"
 
 if [[ ${#merge_order[@]} -eq 0 ]]; then
   echo "Nothing to merge." >&2
@@ -173,8 +175,19 @@ for ((i=0; i<total; i++)); do
   step=$((i + 1))
   pr_number=$(branch_field "$branch" '.change.id' | tr -d '#')
 
+  # Stacked PRs target the branch below; after the PR below merges, GitHub still
+  # points the base at the deleted branch until we retarget onto trunk.
+  current_base=$(gh pr view "$pr_number" --json baseRefName --jq .baseRefName)
+  if [[ "$current_base" != "$trunk" ]]; then
+    echo "  Retargeting PR #${pr_number} (${current_base} → ${trunk})…"
+    if ! gh pr edit "$pr_number" --base "$trunk"; then
+      echo "Error: failed to retarget PR #${pr_number} onto ${trunk}" >&2
+      exit 1
+    fi
+  fi
+
   echo ""
-  echo "[$step/$total] Merging $branch (PR #$pr_number)…"
+  echo "[$step/$total] Merging $branch (PR #${pr_number})…"
 
   # 1. Merge the PR (--no-delete-branch: let gs repo sync handle cleanup)
   merge_cmd=(gh pr merge "$pr_number")
@@ -192,12 +205,16 @@ for ((i=0; i<total; i++)); do
 
   # 2. Sync with remote (pulls trunk, deletes merged branch)
   echo "  Syncing…"
-  yes | gs repo sync
+  if ! gs repo sync --no-prompt; then
+    echo "Error: gs repo sync failed" >&2
+    echo "Re-run spice-merge to continue from this point." >&2
+    exit 1
+  fi
 
   # 3. Checkout next branch and restack
   next_idx=$((i + 1))
   next_branch="${merge_order[$next_idx]}"
-  echo "  Restacking from $next_branch…"
+  echo "  Restacking from ${next_branch}…"
   git checkout "$next_branch" --quiet
   gs upstack restack
 
@@ -209,12 +226,23 @@ for ((i=0; i<total; i++)); do
 
   # 5. Wait for CI on the next PR
   next_pr=$(branch_field "$next_branch" '.change.id' | tr -d '#')
-  echo "  Waiting for CI on PR #$next_pr ($next_branch)…"
-  if ! gh pr checks "$next_pr" --watch; then
-    echo "Error: CI failed on PR #$next_pr ($next_branch)" >&2
-    echo "Fix CI, then re-run spice-merge to continue." >&2
-    exit 1
+  echo "  Waiting for CI on PR #${next_pr} (${next_branch})…"
+  _checks_tmp=$(mktemp)
+  set +e
+  gh pr checks "$next_pr" --watch 2>&1 | tee "$_checks_tmp"
+  _checks_ec=${PIPESTATUS[0]}
+  set -e
+  if [[ ${_checks_ec} -ne 0 ]]; then
+    if grep -Fq "no checks reported" "$_checks_tmp"; then
+      echo "  (no GitHub checks on this PR; continuing)"
+    else
+      echo "Error: CI failed on PR #${next_pr} (${next_branch})" >&2
+      echo "Fix CI, then re-run spice-merge to continue." >&2
+      rm -f "$_checks_tmp"
+      exit 1
+    fi
   fi
+  rm -f "$_checks_tmp"
   echo "  ✓ CI passed"
 done
 
