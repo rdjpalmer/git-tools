@@ -74,7 +74,9 @@ USAGE
 OPTIONS
   -m "message"    Use the given commit message (skips editor). Same as git commit -m.
   --contrib N     LLM contribution percentage (e.g. 50, 75%, 100). Skips the prompt.
+  -c N            Short form of --contrib.
   --last-used     Skip AI and model selection; use the last-used AI co-author and model.
+  -l              Short form of --last-used.
                   Combined with -m, makes the command fully non-interactive.
   --help          Show this help and exit.
 
@@ -84,6 +86,7 @@ EXAMPLES
   commit-ai-coauthor                    # Interactive: select AI, model, enter message
   commit-ai-coauthor -m "fix: typo"      # Interactive: select AI and model, message from -m
   commit-ai-coauthor -m "fix: typo" --last-used   # Non-interactive: commit with last-used AI
+  commit-ai-coauthor -m "fix: typo" -l            # Same as --last-used
   commit-ai-coauthor -m "fix: typo" --contrib 100   # Skip contribution prompt, use 100%
 
 EOF
@@ -118,7 +121,7 @@ while [[ $# -gt 0 ]]; do
       show_help
       exit 0
       ;;
-    --last-used)
+    --last-used|-l)
       last_used=true
       shift
       ;;

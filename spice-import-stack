@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ─── Dependencies ──────────────────────────────────────────────────────────────
+for cmd in jq gs gh git; do
+  command -v "$cmd" &>/dev/null || { echo "Error: '$cmd' is required" >&2; exit 1; }
+done
+
+# ─── Usage ─────────────────────────────────────────────────────────────────────
+show_help() {
+  cat <<'EOF'
+spice-import-stack — Pull, checkout, and track an existing GitHub PR stack
+
+USAGE
+  spice-import-stack [OPTIONS]
+
+SCOPE (mutually exclusive; default: --current)
+  --current           Import the stack for the current branch's PR
+  --branch NAME       Import the stack whose top PR head branch is NAME
+  --pr NUMBER         Import the stack starting at PR NUMBER
+
+OPTIONS
+  --dry-run           Show the import plan without changing local state
+  --help              Show this help and exit
+
+FLOW
+  1. Resolve the top PR from scope
+  2. Walk PR base/head links down to trunk
+  3. For each PR bottom → top:
+     - gh pr checkout <number>
+     - gs branch track --base <expected-base> (if not already tracked)
+
+EXAMPLES
+  spice-import-stack --current
+  spice-import-stack --branch feat-c
+  spice-import-stack --pr 123 --dry-run
+EOF
+}
+
+# ─── Helpers ───────────────────────────────────────────────────────────────────
+open_pr_for_head() {
+  local head_branch="$1"
+  local prs count
+
+  prs=$(gh pr list --head "$head_branch" --state open --json number,state,headRefName,baseRefName,url)
+  count=$(echo "$prs" | jq 'length')
+
+  if [[ "$count" -eq 0 ]]; then
+    return 1
+  fi
+
+  if [[ "$count" -gt 1 ]]; then
+    echo "Error: multiple open PRs found for head branch '$head_branch':" >&2
+    echo "$prs" | jq -r '.[] | "  #\(.number) \(.url)"' >&2
+    exit 1
+  fi
+
+  echo "$prs" | jq -c '.[0]'
+}
+
+branch_is_tracked() {
+  local branch="$1"
+  gs log long --all --json 2>/dev/null | jq -r '.name' | grep -Fxq "$branch"
+}
+
+tracked_base_for_branch() {
+  local branch="$1"
+  gs log long --all --json 2>/dev/null | jq -r --arg name "$branch" 'select(.name == $name) | .down.name // empty' | sed -n '1p'
+}
+
+# ─── Parse arguments ───────────────────────────────────────────────────────────
+scope="current"
+scope_value=""
+scope_flags=0
+dry_run=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --current)
+      scope="current"
+      scope_value=""
+      scope_flags=$((scope_flags + 1))
+      shift
+      ;;
+    --branch)
+      [[ $# -gt 1 ]] || { echo "Error: --branch requires a name" >&2; exit 1; }
+      scope="branch"
+      scope_value="$2"
+      scope_flags=$((scope_flags + 1))
+      shift 2
+      ;;
+    --pr)
+      [[ $# -gt 1 ]] || { echo "Error: --pr requires a number" >&2; exit 1; }
+      scope="pr"
+      scope_value="$2"
+      scope_flags=$((scope_flags + 1))
+      shift 2
+      ;;
+    --dry-run)
+      dry_run=true
+      shift
+      ;;
+    --help|-h)
+      show_help
+      exit 0
+      ;;
+    *)
+      echo "Error: unknown option '$1'" >&2
+      exit 1
+      ;;
+  esac
+done
+
+if ((scope_flags > 1)); then
+  echo "Error: choose exactly one scope flag (--current, --branch, or --pr)" >&2
+  exit 1
+fi
+
+# ─── Resolve trunk and top PR ─────────────────────────────────────────────────
+trunk=$(gs --no-prompt trunk -n 2>/dev/null || true)
+if [[ -z "$trunk" ]]; then
+  echo "Error: could not determine git-spice trunk branch. Run 'gs repo init' first." >&2
+  exit 1
+fi
+
+top_pr_json=""
+case "$scope" in
+  current)
+    top_pr_json=$(gh pr view --json number,state,headRefName,baseRefName,url --jq '{number,state,headRefName,baseRefName,url}' 2>/dev/null || true)
+    [[ -n "$top_pr_json" ]] || { echo "Error: could not resolve a PR for the current branch" >&2; exit 1; }
+    ;;
+  branch)
+    if ! top_pr_json=$(open_pr_for_head "$scope_value"); then
+      echo "Error: no open PR found with head branch '$scope_value'" >&2
+      exit 1
+    fi
+    ;;
+  pr)
+    scope_value="${scope_value#\#}"
+    [[ "$scope_value" =~ ^[0-9]+$ ]] || { echo "Error: --pr requires a numeric value" >&2; exit 1; }
+    top_pr_json=$(gh pr view "$scope_value" --json number,state,headRefName,baseRefName,url --jq '{number,state,headRefName,baseRefName,url}' 2>/dev/null || true)
+    [[ -n "$top_pr_json" ]] || { echo "Error: PR #$scope_value not found" >&2; exit 1; }
+    ;;
+esac
+
+# ─── Build stack path (top → bottom) ──────────────────────────────────────────
+stack_chain=()
+seen_pr_numbers=()
+cursor_pr_json="$top_pr_json"
+
+while true; do
+  pr_number=$(echo "$cursor_pr_json" | jq -r '.number')
+  pr_state=$(echo "$cursor_pr_json" | jq -r '.state')
+  head_branch=$(echo "$cursor_pr_json" | jq -r '.headRefName')
+  base_branch=$(echo "$cursor_pr_json" | jq -r '.baseRefName')
+
+  [[ "$pr_state" == "OPEN" ]] || { echo "Error: PR #$pr_number is not open" >&2; exit 1; }
+
+  for seen in "${seen_pr_numbers[@]}"; do
+    if [[ "$seen" == "$pr_number" ]]; then
+      echo "Error: detected a cycle while resolving stack at PR #$pr_number" >&2
+      exit 1
+    fi
+  done
+
+  stack_chain+=("$cursor_pr_json")
+  seen_pr_numbers+=("$pr_number")
+
+  if [[ "$base_branch" == "$trunk" ]]; then
+    break
+  fi
+
+  if ! cursor_pr_json=$(open_pr_for_head "$base_branch"); then
+    echo "Error: could not find an open PR with head branch '$base_branch' while walking downstack from PR #$pr_number" >&2
+    exit 1
+  fi
+done
+
+if [[ "${#stack_chain[@]}" -lt 2 ]]; then
+  top_number=$(echo "$top_pr_json" | jq -r '.number')
+  top_head=$(echo "$top_pr_json" | jq -r '.headRefName')
+  echo "Error: PR #$top_number ($top_head) is based directly on trunk '$trunk' — no stack to import" >&2
+  exit 1
+fi
+
+# ─── Dry run ───────────────────────────────────────────────────────────────────
+if [[ "$dry_run" == true ]]; then
+  echo "Import plan (${#stack_chain[@]} PRs):"
+  for pr_json in "${stack_chain[@]}"; do
+    printf "  #%-6s %-30s base=%-20s %s\n" \
+      "$(echo "$pr_json" | jq -r '.number')" \
+      "$(echo "$pr_json" | jq -r '.headRefName')" \
+      "$(echo "$pr_json" | jq -r '.baseRefName')" \
+      "$(echo "$pr_json" | jq -r '.url')"
+  done
+
+  echo ""
+  echo "Checkout/track order (bottom → top):"
+  for ((i=${#stack_chain[@]} - 1; i>=0; i--)); do
+    pr_json="${stack_chain[$i]}"
+    printf "  #%-6s %s\n" \
+      "$(echo "$pr_json" | jq -r '.number')" \
+      "$(echo "$pr_json" | jq -r '.headRefName')"
+  done
+  exit 0
+fi
+
+# ─── Import loop (bottom → top) ───────────────────────────────────────────────
+total=${#stack_chain[@]}
+for ((i=total - 1; i>=0; i--)); do
+  pr_json="${stack_chain[$i]}"
+  step=$((total - i))
+  pr_number=$(echo "$pr_json" | jq -r '.number')
+  head_branch=$(echo "$pr_json" | jq -r '.headRefName')
+  base_branch=$(echo "$pr_json" | jq -r '.baseRefName')
+
+  echo ""
+  echo "[$step/$total] Checking out PR #${pr_number} (${head_branch})…"
+  if ! gh pr checkout "$pr_number"; then
+    echo "Error: failed to checkout PR #$pr_number ($head_branch)" >&2
+    exit 1
+  fi
+
+  if branch_is_tracked "$head_branch"; then
+    tracked_base=$(tracked_base_for_branch "$head_branch")
+    if [[ -n "$tracked_base" ]] && [[ "$tracked_base" != "$base_branch" ]]; then
+      echo "Error: branch '$head_branch' is already tracked with base '$tracked_base' (expected '$base_branch')" >&2
+      exit 1
+    fi
+    echo "  ✓ Already tracked"
+    continue
+  fi
+
+  echo "  Tracking '$head_branch' on base '$base_branch'…"
+  if ! gs --no-prompt branch track "$head_branch" --base "$base_branch"; then
+    echo "Error: failed to track '$head_branch' with base '$base_branch'" >&2
+    exit 1
+  fi
+  echo "  ✓ Tracked"
+done
+
+echo ""
+echo "Imported stack (${#stack_chain[@]} PRs):"
+for ((i=total - 1; i>=0; i--)); do
+  pr_json="${stack_chain[$i]}"
+  printf "  #%s %s\n" \
+    "$(echo "$pr_json" | jq -r '.number')" \
+    "$(echo "$pr_json" | jq -r '.headRefName')"
+done

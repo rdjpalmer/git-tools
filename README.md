@@ -31,6 +31,7 @@ git config --global alias.b '!branches'
 git config --global alias.ac '!commit-ai-coauthor'
 git config --global alias.fix '!fix'
 git config --global alias.sm '!spice-merge'
+git config --global alias.si '!spice-import-stack'
 ```
 
 Then use with:
@@ -41,6 +42,7 @@ git ac
 git ac -m "fix: resolve auth bug"
 git fix
 git sm --dry-run
+git si --pr 42 --dry-run
 ```
 
 ## Tools
@@ -69,7 +71,7 @@ Interactively create commits with AI co-author attribution. Uses fzf to select a
 |------|-------------|
 | `-m "message"` | Use the given commit message (skips editor) |
 | `--contrib N` / `-c N` | LLM contribution percentage (e.g. `50`, `75%`, `100`). Skips the prompt. |
-| `--last-used` | Skip AI and model selection; use the last-used AI co-author and model |
+| `--last-used` / `-l` | Skip AI and model selection; use the last-used AI co-author and model |
 | `--help` / `-h` | Show usage and exit |
 
 All other arguments (e.g. `--amend`, `--no-verify`, `-v`) are passed through to `git commit`. With `-m` and `--last-used`, the command is fully non-interactive.
@@ -96,4 +98,20 @@ Sequentially merge a stack of PRs managed by [git-spice](https://github.com/abhi
 | `--merge` | Create a merge commit (passed to `gh pr merge`) |
 | `--rebase` | Rebase and merge (passed to `gh pr merge`) |
 | `--dry-run` | Show the merge plan without executing |
+| `--help` / `-h` | Show usage and exit |
+
+### spice-import-stack
+
+Pull, checkout, and track all branches in an existing GitHub PR stack so you can import that stack onto another machine (or a collaborator can import it locally) without manual per-branch setup.
+
+**Requires:** [jq](https://github.com/jqlang/jq), [git-spice (gs)](https://github.com/abhinav/git-spice), [GitHub CLI (gh)](https://cli.github.com/)
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--current` | Import the stack for the current branch's PR (default) |
+| `--branch NAME` | Import the stack whose top PR head branch is `NAME` |
+| `--pr NUMBER` | Import the stack starting at PR `NUMBER` |
+| `--dry-run` | Show the import plan without changing local state |
 | `--help` / `-h` | Show usage and exit |

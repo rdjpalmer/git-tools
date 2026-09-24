@@ -1,0 +1,42 @@
+--- Preflight
+echo "spice-import-stack.spec.run — local use: runner, git, gh, gs (git-spice), jq; gh for clone/API metadata; git remote origin is always SSH (see sync) so push never uses https://github.com"
+echo "Creates ./repo stack PRs, clones ./repo-import, and runs spice-import-stack on the top PR. From repo root: runner e2e/spice-import-stack.spec.run"
+
+--- Record run id
+date +%s > .spice-import-stack-spec-runid
+
+--- Clone stack source repo
+test -d repo/.git || gh repo clone git@github.com:rdjpalmer/spice-merge-test-runs.git repo
+
+--- Sync stack source repo and init git-spice
+cd repo && git remote set-url origin "$(gh api repos/rdjpalmer/spice-merge-test-runs --jq .ssh_url)" && git fetch origin && git checkout main && git pull --ff-only && gs repo init --remote origin --trunk main --no-prompt && git checkout main
+
+--- Layer 1 — scaffold artifact (PR 1)
+RUN_ID=$(cat .spice-import-stack-spec-runid) && cd repo && mkdir -p runs && printf '%s\n' "# spice-import-stack spec run" "" "- **run_id**: ${RUN_ID}" "- **layer**: 1 (scaffold)" > "runs/spice-import-stack-${RUN_ID}.md" && git add "runs/spice-import-stack-${RUN_ID}.md" && gs bc -m "spice-import-stack.spec: scaffold artifact (${RUN_ID})" "sis-spec-${RUN_ID}-1"
+
+--- Layer 2 — edit artifact (PR 2)
+RUN_ID=$(cat .spice-import-stack-spec-runid) && cd repo && printf '\n%s\n' "## Layer 2" "- edited in stacked PR 2" >> "runs/spice-import-stack-${RUN_ID}.md" && git add "runs/spice-import-stack-${RUN_ID}.md" && gs bc -m "spice-import-stack.spec: layer 2 edit (${RUN_ID})" "sis-spec-${RUN_ID}-2"
+
+--- Layer 3 — edit artifact (PR 3)
+RUN_ID=$(cat .spice-import-stack-spec-runid) && cd repo && printf '\n%s\n' "## Layer 3" "- edited in stacked PR 3" >> "runs/spice-import-stack-${RUN_ID}.md" && git add "runs/spice-import-stack-${RUN_ID}.md" && gs bc -m "spice-import-stack.spec: layer 3 edit (${RUN_ID})" "sis-spec-${RUN_ID}-3"
+
+--- Submit stacked PRs
+cd repo && gs --no-prompt stack submit --fill --web=false
+
+--- Capture top PR number
+RUN_ID=$(cat .spice-import-stack-spec-runid) && cd repo && gh pr list --head "sis-spec-${RUN_ID}-3" --state open --json number --jq '.[0].number' > ../.spice-import-stack-spec-top-pr
+
+--- Clone import repo
+test -d repo-import/.git || gh repo clone git@github.com:rdjpalmer/spice-merge-test-runs.git repo-import
+
+--- Sync import repo and init git-spice
+cd repo-import && git remote set-url origin "$(gh api repos/rdjpalmer/spice-merge-test-runs --jq .ssh_url)" && git fetch origin && git checkout main && git pull --ff-only && gs repo init --remote origin --trunk main --no-prompt && git checkout main
+
+--- Import stack from top PR
+TOP_PR=$(cat .spice-import-stack-spec-top-pr) && export PATH="$(cd .. && pwd):$PATH" && cd repo-import && spice-import-stack --pr "$TOP_PR"
+
+--- Assert branches exist locally
+RUN_ID=$(cat .spice-import-stack-spec-runid) && cd repo-import && for n in 1 2 3; do git show-ref --verify --quiet "refs/heads/sis-spec-${RUN_ID}-${n}"; done
+
+--- Assert stack tracking order
+RUN_ID=$(cat .spice-import-stack-spec-runid) && cd repo-import && gs log long --all --json | jq -s -e --arg b1 "sis-spec-${RUN_ID}-1" --arg b2 "sis-spec-${RUN_ID}-2" --arg b3 "sis-spec-${RUN_ID}-3" '((map(select(.name == $b1))[0].down.name == "main") and (map(select(.name == $b2))[0].down.name == $b1) and (map(select(.name == $b3))[0].down.name == $b2))' > /dev/null

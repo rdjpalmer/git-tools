@@ -11,9 +11,9 @@
 #
 # Lines starting with # are ignored. Add your own entries to extend the list.
 
-Claude|noreply@anthropic.com|claude-sonnet-4|claude-sonnet-4,claude-opus-4,claude-3-5-sonnet,claude-3-5-haiku,claude-3-opus,claude-3-sonnet
-Cursor|noreply@cursor.com|composer-2|composer-2,composer-2-fast,claude-sonnet-4,claude-opus-4,gpt-4o,gpt-4-turbo,claude-3-5-sonnet
-GitHub Copilot|noreply@github.com|copilot|copilot,copilot-chat,gpt-4,gpt-4o
-ChatGPT|noreply@openai.com|gpt-4o|gpt-4o,gpt-4o-mini,gpt-4,gpt-4-turbo,o1,o1-mini
-Aider|aider@aider.chat|gpt-4o|gpt-4o,claude-sonnet-4,claude-opus-4,claude-3-5-sonnet,gpt-4-turbo
-Warp|noreply@warp.dev|auto-responsive|auto-responsive,auto-genius,auto-cost-efficient,oz,claude-opus-4.6,claude-sonnet-4.6,claude-opus-4.5,claude-sonnet-4.5,claude-opus-4.1,claude-haiku-4.5,gpt-5.3-codex,gpt-5.2-codex,gpt-5.2,gpt-5.1-codex,gpt-5.1,gpt-5,gemini-3-pro,gemini-2.5-pro,kimi k2.5
+Claude|noreply@anthropic.com|claude-5-1-fable|claude-5-5-opus,claude-5-1-fable,claude-5-fable,claude-5-opus,claude-5-sonnet,claude-4-8-opus,claude-4-5-haiku
+Cursor|noreply@cursor.com|composer-2|composer-2,composer-2-fast,claude-opus-4-6,claude-sonnet-4-6,claude-opus-4-5,claude-sonnet-4-5,gpt-5.4,gpt-4o
+GitHub Copilot|noreply@github.com|copilot|copilot,copilot-chat,gpt-4o,gpt-4.1,o3,o4-mini
+ChatGPT|noreply@openai.com|gpt-5.4|gpt-5.4,gpt-5.4-mini,gpt-5.3-codex,gpt-5.2,gpt-4o,gpt-4o-mini,o3,o4-mini
+Aider|aider@aider.chat|claude-sonnet-4-6|claude-sonnet-4-6,claude-opus-4-6,gpt-5.4,gpt-4o,claude-sonnet-4-5
+Oz|noreply@warp.dev|auto|auto,auto-efficient,auto-genius,auto-open,claude-5-5-opus,claude-5-1-fable,claude-5-fable,claude-5-opus,claude-5-sonnet,claude-4-8-opus,claude-4-5-haiku,gpt-5-6-sol,gpt-5-6-terra,gpt-5-6-luna,gpt-5-5,gpt-5-4,gpt-5-3-codex,gemini-3.1-pro,gemini-3.5-flash,gemini-3.6-flash,kimi-k27-code-fireworks,kimi-k3-fireworks,deepseek-v4-pro-fireworks,qwen-3.7-plus-fireworks
